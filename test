@@ -1,0 +1,20 @@
+let tableName = "Test";  // Change this if needed
+
+// Step 1: get total size of ALL columns
+let TotalSize = 
+    table(tableName)
+    | where TimeGenerated > ago(30d)
+    | extend sizeAll = estimate_data_size(*)
+    | summarize TotalBytes = sum(sizeAll);
+
+// Step 2: get size per column
+table(tableName)
+| where TimeGenerated > ago(30d)
+| extend ColumnSizes = estimate_data_size(*)
+| mv-expand ColumnSizes
+| summarize ColumnBytes = sum(tolong(ColumnSizes.Size)) by Column = tostring(ColumnSizes.Name)
+// Step 3: join total
+| join kind=inner (TotalSize) on $left.Column == $right.Column
+| extend ColumnGB = round(ColumnBytes / 1024.0 / 1024.0 / 1024.0, 2)
+| extend PercentOfTable = round((todouble(ColumnBytes) / todouble(TotalBytes)) * 100.0, 2)
+| order by PercentOfTable desc
