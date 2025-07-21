@@ -1,6 +1,7 @@
 CommonSecurityLog
-| where TimeGenerated > ago(30d)                // optional time filter
-| extend bag = pack_all()                       // pack every column into a dynamic object
-| mv-expand key = bag_keys(bag)                 // explode out each column name
-| where isnotempty(bag[key])                    // only keep keys whose value isn’t null/empty
-| distinct key                                  // dedupe to get the list of “non-empty” columns
+| where TimeGenerated > ago(30d)
+| extend bag = pack_all() 
+| mv-expand key = bag_keys(bag)
+| extend keyStr = tostring(key)          // ✅ cast dynamic → string
+| where isnotempty(bag[keyStr])          // now it works as proper string index
+| distinct keyStr
