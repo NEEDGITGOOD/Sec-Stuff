@@ -1,7 +1,22 @@
-CommonSecurityLog
-| where TimeGenerated > ago(30d)
-| extend bag = pack_all() 
-| mv-expand key = bag_keys(bag)
-| extend keyStr = tostring(key)          // ✅ cast dynamic → string
-| where isnotempty(bag[keyStr])          // now it works as proper string index
-| distinct keyStr
+DeviceNetworkEvents
+| where ActionType == "InboundConnectionAttempt"
+| extend LocalIPAddress = IPAddress 
+| join kind=leftanti (
+    DeviceNetworkInfo
+    | where NetworkAdapterType == "Wwanpp"
+    | extend ParsedIPs = parse_json(IPAddresses)
+    | mv-expand ParsedIP = ParsedIPs
+    | project DeviceName, IPAddress = tostring(ParsedIP.IPAddress)
+) on DeviceName, $left.LocalIPAddress == $right.IPAddress
+
+DeviceNetworkEvents
+| where ActionType == "InboundConnectionAttempt"
+| extend LocalIPAddress = IPAddress 
+| join kind=leftanti (
+    DeviceNetworkInfo
+    | where NetworkAdapterType == "Wwanpp"
+    | extend ParsedIPs = parse_json(IPAddresses)
+    | mv-expand ParsedIP = ParsedIPs
+    | extend IPAddress = tostring(ParsedIP.IPAddress)
+    | project DeviceName, IPAddress
+) on DeviceName and $left.LocalIPAddress == $right.IPAddress
