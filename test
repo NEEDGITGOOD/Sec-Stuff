@@ -1,44 +1,38 @@
-```kql
+// Get total count
 SecurityIncident
-| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
-| mv-expand ProductName = ProductNames
-| summarize Count = count() by tostring(ProductName), Title, Severity
-| order by ProductName, Count desc
-```
-
-```kql
-SecurityIncident
-| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
-| mv-expand ProductName = ProductNames
-| summarize Count = count() by tostring(ProductName), Title, Severity
-| summarize 
-    TitleDetails = make_bag(pack("Title", Title, "Severity", Severity, "Count", Count))
-    by ProductName
-```
-
-```kql
-SecurityIncident
-| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
-| mv-expand ProductName = ProductNames
-| summarize 
-    Count = count(),
-    Severities = make_set(Severity)
-    by tostring(ProductName), Title
-| extend TitleInfo = strcat(Title, " (", strcat_array(Severities, ","), ") - Count: ", Count)
-| summarize 
-    UniqueTitle = dcount(Title),
-    TitleDetails = make_list(TitleInfo),
-    TotalIncidents = sum(Count)
-    by ProductName
-```
-
-```kql
-SecurityIncident
-| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
-| mv-expand ProductName = ProductNames
-| project ProductName = tostring(ProductName), Title, Severity
-| summarize 
-    IncidentCount = count(), 
-    by ProductName, Title, Severity
-| order by ProductName, IncidentCount desc
-```
+| where TimeGenerated > ago(30d)
+| distinct IncidentNumber
+| count
+| extend Category = "Total Incidents"
+| union (
+    // Get IoT incident count
+    SecurityIncident
+    | where TimeGenerated > ago(30d)
+    | summarize arg_max(TimeGenerated,*) by IncidentNumber  
+    | mv-expand AlertIds to typeof(string)  
+    | join kind=inner (
+        SecurityAlert 
+        | where TimeGenerated > ago(30d)
+        | where ProductName == @"Azure Security Center for IoT"
+        | distinct SystemAlertId
+    ) on $left.AlertIds == $right.SystemAlertId
+    | distinct IncidentNumber
+    | count
+    | extend Category = "IoT Incidents (Excluded)"
+)
+| union (
+    // Get non-IoT incident count
+    SecurityIncident
+    | where TimeGenerated > ago(30d)
+    | summarize arg_max(TimeGenerated,*) by IncidentNumber  
+    | mv-expand AlertIds to typeof(string)  
+    | join kind=leftanti (
+        SecurityAlert 
+        | where TimeGenerated > ago(30d)
+        | where ProductName == @"Azure Security Center for IoT"
+        | distinct SystemAlertId
+    ) on $left.AlertIds == $right.SystemAlertId
+    | distinct IncidentNumber
+    | count
+    | extend Category = "Non-IoT Incidents (Kept)"
+)
