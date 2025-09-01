@@ -1,22 +1,44 @@
-DeviceNetworkEvents
-| where ActionType == "InboundConnectionAttempt"
-| extend LocalIPAddress = IPAddress 
-| join kind=leftanti (
-    DeviceNetworkInfo
-    | where NetworkAdapterType == "Wwanpp"
-    | extend ParsedIPs = parse_json(IPAddresses)
-    | mv-expand ParsedIP = ParsedIPs
-    | project DeviceName, IPAddress = tostring(ParsedIP.IPAddress)
-) on DeviceName, $left.LocalIPAddress == $right.IPAddress
+```kql
+SecurityIncident
+| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
+| mv-expand ProductName = ProductNames
+| summarize Count = count() by tostring(ProductName), Title, Severity
+| order by ProductName, Count desc
+```
 
-DeviceNetworkEvents
-| where ActionType == "InboundConnectionAttempt"
-| extend LocalIPAddress = IPAddress 
-| join kind=leftanti (
-    DeviceNetworkInfo
-    | where NetworkAdapterType == "Wwanpp"
-    | extend ParsedIPs = parse_json(IPAddresses)
-    | mv-expand ParsedIP = ParsedIPs
-    | extend IPAddress = tostring(ParsedIP.IPAddress)
-    | project DeviceName, IPAddress
-) on DeviceName and $left.LocalIPAddress == $right.IPAddress
+```kql
+SecurityIncident
+| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
+| mv-expand ProductName = ProductNames
+| summarize Count = count() by tostring(ProductName), Title, Severity
+| summarize 
+    TitleDetails = make_bag(pack("Title", Title, "Severity", Severity, "Count", Count))
+    by ProductName
+```
+
+```kql
+SecurityIncident
+| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
+| mv-expand ProductName = ProductNames
+| summarize 
+    Count = count(),
+    Severities = make_set(Severity)
+    by tostring(ProductName), Title
+| extend TitleInfo = strcat(Title, " (", strcat_array(Severities, ","), ") - Count: ", Count)
+| summarize 
+    UniqueTitle = dcount(Title),
+    TitleDetails = make_list(TitleInfo),
+    TotalIncidents = sum(Count)
+    by ProductName
+```
+
+```kql
+SecurityIncident
+| extend ProductNames = parse_json(tostring(AdditionalData["alertProductNames"]))
+| mv-expand ProductName = ProductNames
+| project ProductName = tostring(ProductName), Title, Severity
+| summarize 
+    IncidentCount = count(), 
+    by ProductName, Title, Severity
+| order by ProductName, IncidentCount desc
+```
