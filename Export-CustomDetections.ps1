@@ -1,22 +1,22 @@
-﻿<#
+<#
   Exportiert alle Defender-XDR-Custom-Detections per Graph API und erzeugt:
 
   1) CustomDetectionRules.csv  -> Sentinel-Watchlist "CustomDetectionRules"
-     (SearchKey: RuleId). Enthält Query (QueryGz) und alle Einstellungen
-     (SettingsGz) gzip+Base64-kodiert für die Detailansicht im Workbook.
+     (SearchKey: RuleId). Enthaelt Query (QueryGz) und alle Einstellungen
+     (SettingsGz) gzip+Base64-kodiert fuer die Detailansicht im Workbook.
 
   2) .\AnalyticsRuleTemplates\<Regelname>.json
-     Je Custom Detection ein fertiges ARM-Template für eine Analytics Rule
-     mit übernommenen Einstellungen (Name, Query, Severity, Taktiken,
+     Je Custom Detection ein fertiges ARM-Template fuer eine Analytics Rule
+     mit uebernommenen Einstellungen (Name, Query, Severity, Taktiken,
      MITRE-Techniken, Intervall, Entity Mapping, Beschreibung).
      Import: Sentinel > Analytics > Import, oder per Pipeline deployen.
-     Die Regeln werden DEAKTIVIERT angelegt (außer mit -EnableRules).
+     Die Regeln werden DEAKTIVIERT angelegt (ausser mit -EnableRules).
 
   Voraussetzung: Install-Module Microsoft.Graph.Authentication
   Recht:         CustomDetection.Read.All (delegiert)
 
   Die Spalten AnalyticsRuleName, ManualStatus und Notes pflegst du in der CSV.
-  Bei erneutem Export bleiben sie erhalten (Abgleich über RuleId).
+  Bei erneutem Export bleiben sie erhalten (Abgleich ueber RuleId).
 
   -InputJson <Datei>: liest die Regeln aus einer gespeicherten Graph-Antwort
   statt live aus der API (zum Testen/offline).
@@ -64,7 +64,7 @@ function Get-StableGuid([string]$Seed) {
     return ([guid]::new($hash)).ToString()
 }
 
-# Vereinheitlicht eine Regel aus der Graph-Antwort. Unterstützt das bisherige
+# Vereinheitlicht eine Regel aus der Graph-Antwort. Unterstuetzt das bisherige
 # Beta-Schema (isEnabled, schedule.period, mitreTechniques, impactedAssets,
 # responseActions) und das neuere (status, schedule.frequency, tactics[],
 # entityMappings, automatedActions).
@@ -86,7 +86,7 @@ function ConvertTo-NormalizedRule($r) {
     if ($tpl.category) { $tactics += "$($tpl.category)" }
     if ($tpl.mitreTechniques) { $techniques += @($tpl.mitreTechniques | ForEach-Object { "$_" }) }
 
-    # Entitäten: Liste von Gruppen @{ Kind; Fields = @(@{ Field; Column }) }
+    # Entitaeten: Liste von Gruppen @{ Kind; Fields = @(@{ Field; Column }) }
     $entities = @()
     foreach ($a in @($tpl.impactedAssets)) {
         if (-not $a -or -not $a.identifier) { continue }
@@ -177,7 +177,7 @@ function Get-ArSchedule($n, [System.Collections.Generic.List[string]]$hints) {
     $result.CdLookback = Format-Span $cdLookback
 
     # Zeitraum der Analytics Rule = Frequenz (sonst wertet Sentinel dieselben
-    # Events mehrfach aus und alarmiert doppelt), erweitert auf das größte
+    # Events mehrfach aus und alarmiert doppelt), erweitert auf das groesste
     # ago() in der Query, maximal 14 Tage.
     $period = $freq
     $maxAgo = [TimeSpan]::Zero
@@ -198,10 +198,10 @@ function Get-ArSchedule($n, [System.Collections.Generic.List[string]]$hints) {
     $max = [TimeSpan]::FromDays(14)
     if ($period -gt $max) {
         $period = $max
-        $hints.Add('Zeitraum auf das Sentinel-Maximum von 14 Tagen gekürzt.')
+        $hints.Add('Zeitraum auf das Sentinel-Maximum von 14 Tagen gekuerzt.')
     }
     if ($cdLookback -gt $period) {
-        $hints.Add("Die Custom Detection prüfte $(Format-Span $cdLookback) rückwirkend (mit eingebauter Deduplizierung), die Analytics Rule nur $(Format-Span $period). Bei Schwellwert- oder Aggregationslogik den Zeitraum prüfen.")
+        $hints.Add("Die Custom Detection pruefte $(Format-Span $cdLookback) rueckwirkend (mit eingebauter Deduplizierung), die Analytics Rule nur $(Format-Span $period). Bei Schwellwert- oder Aggregationslogik den Zeitraum pruefen.")
     }
 
     $result.Frequency = ConvertTo-IsoDuration $freq
@@ -210,7 +210,7 @@ function Get-ArSchedule($n, [System.Collections.Generic.List[string]]$hints) {
     return $result
 }
 
-# Entitäten der Custom Detection -> entityMappings der Analytics Rule
+# Entitaeten der Custom Detection -> entityMappings der Analytics Rule
 function Get-ArEntityMappings($n, [System.Collections.Generic.List[string]]$hints) {
     $mappings = @()
     foreach ($e in $n.Entities) {
@@ -225,11 +225,11 @@ function Get-ArEntityMappings($n, [System.Collections.Generic.List[string]]$hint
                 if ($field -match 'name') { $identifier = 'FullName' }
                 elseif ($n.Query -match '\bDeviceName\b') {
                     $fieldMappings += [ordered]@{ identifier = 'FullName'; columnName = 'DeviceName' }
-                    $hints.Add("Entity: '$($f.Column)' hat keinen Host-Identifier in Sentinel, stattdessen DeviceName gemappt. Prüfen, ob die Query DeviceName ausgibt.")
+                    $hints.Add("Entity: '$($f.Column)' hat keinen Host-Identifier in Sentinel, stattdessen DeviceName gemappt. Pruefen, ob die Query DeviceName ausgibt.")
                     continue
                 }
                 else {
-                    $hints.Add("Entity: '$($f.Column)' lässt sich nicht auf Host mappen. DeviceName in der Query ausgeben und als Host/FullName mappen.")
+                    $hints.Add("Entity: '$($f.Column)' laesst sich nicht auf Host mappen. DeviceName in der Query ausgeben und als Host/FullName mappen.")
                     continue
                 }
             }
@@ -260,7 +260,7 @@ function Get-ArEntityMappings($n, [System.Collections.Generic.List[string]]$hint
         }
     }
     if ($mappings.Count -gt 10) {
-        $hints.Add('Mehr als 10 Entity Mappings, auf 10 gekürzt.')
+        $hints.Add('Mehr als 10 Entity Mappings, auf 10 gekuerzt.')
         $mappings = @($mappings | Select-Object -First 10)
     }
     return , $mappings
@@ -273,7 +273,7 @@ function New-ArTemplate($n, $schedule, $entityMappings, [System.Collections.Gene
         $clean = $t -replace '[\s\-_]', ''
         $hit = $SentinelTactics | Where-Object { $_ -ieq $clean } | Select-Object -First 1
         if ($hit) { $tactics += $hit }
-        else { $hints.Add("Kategorie '$t' ist keine Sentinel-Taktik und wurde nicht übernommen.") }
+        else { $hints.Add("Kategorie '$t' ist keine Sentinel-Taktik und wurde nicht uebernommen.") }
     }
     $tactics = @($tactics | Select-Object -Unique)
 
@@ -287,17 +287,17 @@ function New-ArTemplate($n, $schedule, $entityMappings, [System.Collections.Gene
     }
 
     $description = $n.Description
-    if ($n.Recommended) { $description = ($description + "`n`nEmpfohlene Maßnahmen: " + $n.Recommended).Trim() }
+    if ($n.Recommended) { $description = ($description + "`n`nEmpfohlene Aktionen: " + $n.Recommended).Trim() }
     if ($description.Length -gt 5000) {
         $description = $description.Substring(0, 5000)
-        $hints.Add('Beschreibung auf 5000 Zeichen gekürzt.')
+        $hints.Add('Beschreibung auf 5000 Zeichen gekuerzt.')
     }
 
     $override = $null
     if ($n.Title -and ($n.Title -ne $n.Name -or $n.Title -match '\{\{')) {
         $override = [ordered]@{ alertDisplayNameFormat = $n.Title }
         if ($n.Description -match '\{\{') { $override.alertDescriptionFormat = $n.Description }
-        $hints.Add("Alert-Titel weicht vom Regelnamen ab und wurde als Alert-Namensformat übernommen: '$($n.Title)'.")
+        $hints.Add("Alert-Titel weicht vom Regelnamen ab und wurde als Alert-Namensformat uebernommen: '$($n.Title)'.")
     }
 
     $props = [ordered]@{
@@ -371,7 +371,7 @@ else {
     }
 }
 
-# Manuell gepflegte Spalten aus vorhandener CSV übernehmen
+# Manuell gepflegte Spalten aus vorhandener CSV uebernehmen
 $manual = @{}
 if (Test-Path $Path) {
     Import-Csv $Path | ForEach-Object { $manual[$_.RuleId] = $_ }
@@ -392,10 +392,10 @@ $rows = foreach ($r in $rules) {
     $template = New-ArTemplate $n $schedule $entityMappings $hints
 
     if ($n.Actions.Count -gt 0) {
-        $hints.Add("Response Actions ($($n.Actions -join ', ')) gibt es bei Analytics Rules nicht. Über Automation Rule und Playbook nachbauen.")
+        $hints.Add("Response Actions ($($n.Actions -join ', ')) gibt es bei Analytics Rules nicht. Ueber Automation Rule und Playbook nachbauen.")
     }
     if ($n.Scope) {
-        $hints.Add('Die Custom Detection ist auf Gerätegruppen eingeschränkt. Analytics Rules kennen keinen Scope, Einschränkung in die Query übernehmen.')
+        $hints.Add('Die Custom Detection ist auf Geraetegruppen eingeschraenkt. Analytics Rules kennen keinen Scope, Einschraenkung in die Query uebernehmen.')
     }
 
     # ARM-Template schreiben
@@ -419,30 +419,30 @@ $rows = foreach ($r in $rules) {
     }) -join '; '
     $p = $template.resources[0].properties
 
-    # Einstellungen für die Detailansicht im Workbook (Reihenfolge = Anzeige)
+    # Einstellungen fuer die Detailansicht im Workbook (Reihenfolge = Anzeige)
     $settings = @(
         @{ k = 'Name';                         v = $n.Name }
         @{ k = 'Alert-Titel';                  v = $n.Title }
         @{ k = 'Beschreibung';                 v = $n.Description }
-        @{ k = 'Empfohlene Maßnahmen';         v = $n.Recommended }
+        @{ k = 'Empfohlene Aktionen';         v = $n.Recommended }
         @{ k = 'Severity';                     v = $n.Severity }
         @{ k = 'Kategorie / Taktiken';         v = ($n.Tactics -join ', ') }
         @{ k = 'MITRE-Techniken';              v = ($n.Techniques -join ', ') }
         @{ k = 'Intervall';                    v = $schedule.CdText }
         @{ k = 'Lookback';                     v = $schedule.CdLookback }
-        @{ k = 'Betroffene Entitäten';         v = $entityText }
+        @{ k = 'Betroffene Entities';         v = $entityText }
         @{ k = 'Response Actions';             v = ($n.Actions -join ', ') }
-        @{ k = 'Geräte-Scope';                 v = $n.Scope }
+        @{ k = 'Device-Scope';                 v = $n.Scope }
         @{ k = 'Aktiv';                        v = "$($n.Enabled)" }
         @{ k = 'Erstellt';                     v = "$($n.CreatedBy) $($n.Created)".Trim() }
-        @{ k = 'Zuletzt geändert';             v = "$($n.ModifiedBy) $($n.Modified)".Trim() }
+        @{ k = 'Zuletzt bearbeitet';             v = "$($n.ModifiedBy) $($n.Modified)".Trim() }
         @{ k = 'Regel-ID';                     v = $n.Id }
-        @{ k = '→ Analytics Rule: Typ';        v = $schedule.Kind }
-        @{ k = '→ Analytics Rule: Zeitplan';   v = "$($schedule.ArText)" }
-        @{ k = '→ Analytics Rule: Taktiken';   v = ($p.tactics -join ', ') }
-        @{ k = '→ Analytics Rule: Techniken';  v = (@($p.techniques) + @($p.subTechniques) -join ', ') }
-        @{ k = '→ Analytics Rule: Entities';   v = $arEntityText }
-        @{ k = '→ Analytics Rule: Template';   v = "$fileBase.json" }
+        @{ k = '-> Analytics Rule: Typ';        v = $schedule.Kind }
+        @{ k = '-> Analytics Rule: Zeitplan';   v = "$($schedule.ArText)" }
+        @{ k = '-> Analytics Rule: Taktiken';   v = ($p.tactics -join ', ') }
+        @{ k = '-> Analytics Rule: Techniken';  v = (@($p.techniques) + @($p.subTechniques) -join ', ') }
+        @{ k = '-> Analytics Rule: Entities';   v = $arEntityText }
+        @{ k = '-> Analytics Rule: Template';   v = "$fileBase.json" }
         @{ k = 'Hinweise zur Migration';       v = ($hints -join "`n") }
     ) | Where-Object { $_.v }
     $settingsJson = ConvertTo-Json -InputObject @($settings | ForEach-Object { [ordered]@{ k = $_.k; v = "$($_.v)" } }) -Compress -Depth 3
@@ -450,11 +450,11 @@ $rows = foreach ($r in $rules) {
     $queryGz = Compress-Text $n.Query
     $settingsGz = Compress-Text $settingsJson
     if (($queryGz.Length + $settingsGz.Length) -gt 9000) {
-        Write-Warning "'$($n.Name)': Einstellungen zu lang für die Watchlist-Zeile, werden im Workbook ausgelassen (Template ist vollständig)."
+        Write-Warning "'$($n.Name)': Einstellungen zu lang fuer die Watchlist-Zeile, werden im Workbook ausgelassen (Template ist vollstaendig)."
         $settingsGz = ''
     }
     if ($queryGz.Length -gt 9000) {
-        Write-Warning "'$($n.Name)': Query zu lang für die Watchlist-Zeile, wird im Workbook ausgelassen (Template ist vollständig)."
+        Write-Warning "'$($n.Name)': Query zu lang fuer die Watchlist-Zeile, wird im Workbook ausgelassen (Template ist vollstaendig)."
         $queryGz = ''
     }
 
