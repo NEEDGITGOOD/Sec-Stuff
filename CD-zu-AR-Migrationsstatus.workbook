@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "# Migration: Custom Detections → Analytics Rules\n\nAbgleich der Defender-Custom-Detections (Watchlist `{Watchlist}`, Export per Skript) mit den Analytics Rules des Workspaces (live per ARM). Zuordnung über den Regelnamen, ohne Groß-/Kleinschreibung; abweichende Namen über die Spalte `AnalyticsRuleName` in der Watchlist.\n\n| Status | Bedeutung |\n|---|---|\n| **Offen** | Keine Analytics Rule mit passendem Namen |\n| **Parallelbetrieb** | Analytics Rule existiert, Custom Detection noch aktiv → Alerts vergleichen, dann Custom Detection deaktivieren |\n| **Abgeschlossen** | Analytics Rule existiert, Custom Detection deaktiviert |\n| *eigener Wert* | Aus Spalte `ManualStatus` (z. B. „Nicht migrieren“) – überschreibt die Automatik |"
+        "json": "# Migration: Custom Detections → Analytics Rules\n\nAbgleich der Defender-Custom-Detections (Watchlist `{Watchlist}`, Export per Skript) mit den Analytics Rules des Workspaces (live per ARM). Zuordnung über den Regelnamen, ohne Groß-/Kleinschreibung; abweichende Namen über die Spalte `AnalyticsRuleName` in der Watchlist.\n\n| Status | Bedeutung |\n|---|---|\n| **Offen** | Keine Analytics Rule mit passendem Namen |\n| **AR inaktiv** | Analytics Rule angelegt (z. B. per Template-Import), aber noch deaktiviert → prüfen und aktivieren |\n| **Parallelbetrieb** | Analytics Rule existiert, Custom Detection noch aktiv → Alerts vergleichen, dann Custom Detection deaktivieren |\n| **Abgeschlossen** | Analytics Rule existiert, Custom Detection deaktiviert |\n| *eigener Wert* | Aus Spalte `ManualStatus` (z. B. „Nicht migrieren“) – überschreibt die Automatik |"
       },
       "name": "intro"
     },
@@ -18,7 +18,7 @@
         "resourceType": "microsoft.operationalinsights/workspaces",
         "parameters": [
           {
-            "id": "6653cce6-7a76-41f0-b8a3-c226d1e7afde",
+            "id": "f13db4c7-328e-4af1-918f-cf17da4b5cfc",
             "version": "KqlParameterItem/1.0",
             "name": "Workspace",
             "label": "Sentinel-Workspace",
@@ -42,7 +42,7 @@
             "defaultValue": "value::1"
           },
           {
-            "id": "dcd0fc9d-9190-429c-b653-9f09946a96bc",
+            "id": "226d0320-5997-4ad5-a6f9-c3456b89df9a",
             "version": "KqlParameterItem/1.0",
             "name": "TimeRange",
             "label": "Zeitraum (Alerts)",
@@ -70,7 +70,7 @@
             }
           },
           {
-            "id": "b60f45a4-642d-45c3-ae54-9b6519dc5f24",
+            "id": "f4b4a529-cc78-4c6d-afc4-0b829ba8ac9b",
             "version": "KqlParameterItem/1.0",
             "name": "Watchlist",
             "label": "Watchlist-Alias",
@@ -79,7 +79,7 @@
             "value": "CustomDetectionRules"
           },
           {
-            "id": "6bcbd8c9-a048-4ac6-a41d-c14ad8bca71b",
+            "id": "108bba77-839b-487e-adfc-03553d1e851c",
             "version": "KqlParameterItem/1.0",
             "name": "ARRules",
             "label": "Analytics Rules (live)",
@@ -97,6 +97,26 @@
               "showDefault": false
             },
             "defaultValue": "value::all"
+          },
+          {
+            "id": "ecaf30f9-ad47-49eb-83a0-87b4a7857de9",
+            "version": "KqlParameterItem/1.0",
+            "name": "ARDisabled",
+            "label": "Analytics Rules deaktiviert (live)",
+            "type": 2,
+            "multiSelect": true,
+            "quote": "\"",
+            "delimiter": ",",
+            "query": "{\"version\": \"ARMEndpoint/1.0\", \"data\": null, \"headers\": [], \"method\": \"GET\", \"path\": \"{Workspace}/providers/Microsoft.SecurityInsights/alertRules\", \"urlParams\": [{\"key\": \"api-version\", \"value\": \"2024-09-01\"}], \"batchDisabled\": false, \"transformers\": [{\"type\": \"jsonpath\", \"settings\": {\"tablePath\": \"$.value[?(@.properties.enabled==false)]\", \"columns\": [{\"path\": \"$.properties.displayName\", \"columnid\": \"value\"}]}}]}",
+            "queryType": 12,
+            "isHiddenWhenLocked": true,
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "defaultValue": "value::all"
           }
         ]
       }
@@ -105,7 +125,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Anzahl = count() by Status\n| union (CD | summarize Anzahl = count() | extend Status = 'Gesamt')\n| extend Sort = case(Status == 'Gesamt', 0, Status == 'Offen', 1, Status == 'Parallelbetrieb', 2, Status == 'Abgeschlossen', 3, 4)\n| order by Sort asc\n| project Status, Anzahl",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet AROff = datatable(ARName:string)[{ARDisabled}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARInaktiv = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | join kind=leftouter AROff on Key\n    | extend ARVorhanden = coalesce(ARExists, false), ARAktiv = coalesce(ARExists, false) and not(coalesce(ARInaktiv, false))\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(ARAktiv), 'AR inaktiv',\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Anzahl = count() by Status\n| union (CD | summarize Anzahl = count() | extend Status = 'Gesamt')\n| extend Sort = case(Status == 'Gesamt', 0, Status == 'Offen', 1, Status == 'AR inaktiv', 2, Status == 'Parallelbetrieb', 3, Status == 'Abgeschlossen', 4, 5)\n| order by Sort asc\n| project Status, Anzahl",
         "size": 0,
         "title": "Überblick",
         "queryType": 0,
@@ -142,7 +162,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Gesamt = count(), Erledigt = countif(Status == 'Abgeschlossen'), Parallel = countif(Status == 'Parallelbetrieb'), Stand = max(todatetime(column_ifexists('LastUpdatedTimeUTC', '')))\n| project Fortschritt = strcat(round(100.0 * Erledigt / Gesamt, 0), ' % abgeschlossen'),\n          InArbeit = strcat(round(100.0 * Parallel / Gesamt, 0), ' % im Parallelbetrieb'),\n          WatchlistStand = Stand",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet AROff = datatable(ARName:string)[{ARDisabled}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARInaktiv = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | join kind=leftouter AROff on Key\n    | extend ARVorhanden = coalesce(ARExists, false), ARAktiv = coalesce(ARExists, false) and not(coalesce(ARInaktiv, false))\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(ARAktiv), 'AR inaktiv',\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Gesamt = count(), Erledigt = countif(Status == 'Abgeschlossen'), Parallel = countif(Status == 'Parallelbetrieb'), Stand = max(todatetime(column_ifexists('LastUpdatedTimeUTC', '')))\n| project Fortschritt = strcat(round(100.0 * Erledigt / Gesamt, 0), ' % abgeschlossen'),\n          InArbeit = strcat(round(100.0 * Parallel / Gesamt, 0), ' % im Parallelbetrieb'),\n          WatchlistStand = Stand",
         "size": 0,
         "title": "Fortschritt und Datenstand",
         "queryType": 0,
@@ -158,7 +178,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| project Status, Regel, ZielRegel, CDAktiv, ARVorhanden, Severity, Intervall, Tabellen, Aktionen, LetzterLauf, Notiz, RuleId\n| extend Sort = case(Status == 'Offen', 1, Status == 'Parallelbetrieb', 2, Status == 'Abgeschlossen', 4, 3)\n| order by Sort asc, Regel asc\n| project-away Sort",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet AROff = datatable(ARName:string)[{ARDisabled}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARInaktiv = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | join kind=leftouter AROff on Key\n    | extend ARVorhanden = coalesce(ARExists, false), ARAktiv = coalesce(ARExists, false) and not(coalesce(ARInaktiv, false))\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(ARAktiv), 'AR inaktiv',\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| project Status, Regel, ZielRegel, CDAktiv, ARVorhanden, ARAktiv, Severity, Intervall, Tabellen, Aktionen, LetzterLauf, Notiz, RuleId\n| extend Sort = case(Status == 'Offen', 1, Status == 'AR inaktiv', 2, Status == 'Parallelbetrieb', 3, Status == 'Abgeschlossen', 5, 4)\n| order by Sort asc, Regel asc\n| project-away Sort",
         "size": 0,
         "title": "Status je Custom Detection (Zeile anklicken = Query anzeigen)",
         "queryType": 0,
@@ -212,6 +232,12 @@
                     "text": "{0}{1}"
                   },
                   {
+                    "operator": "==",
+                    "thresholdValue": "AR inaktiv",
+                    "representation": "disabled",
+                    "text": "{0}{1}"
+                  },
+                  {
                     "operator": "Default",
                     "thresholdValue": null,
                     "representation": "unknown",
@@ -235,6 +261,10 @@
             {
               "columnId": "ARVorhanden",
               "label": "AR vorhanden"
+            },
+            {
+              "columnId": "ARAktiv",
+              "label": "AR aktiv"
             },
             {
               "columnId": "LetzterLauf",
@@ -273,7 +303,7 @@
               ],
               "parameters": [
                 {
-                  "id": "7665d8ea-856b-447b-a881-0329be25ad54",
+                  "id": "cc1ca9cb-aa5d-4a94-9996-dfbfefb1b46a",
                   "version": "KqlParameterItem/1.0",
                   "name": "CDQuery",
                   "type": 1,
@@ -286,7 +316,7 @@
                   "resourceType": "microsoft.operationalinsights/workspaces"
                 },
                 {
-                  "id": "d832c52b-a3ef-48d1-93dc-ece741ebc8a1",
+                  "id": "1c8d6bdd-e55b-41ed-b100-bcd9d94b0877",
                   "version": "KqlParameterItem/1.0",
                   "name": "ARQuery",
                   "type": 1,
@@ -295,6 +325,41 @@
                   "queryType": 12
                 }
               ]
+            }
+          },
+          {
+            "type": 3,
+            "name": "cdsettings",
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "_GetWatchlist('{Watchlist}')\n| where tostring(column_ifexists('RuleId', '')) == '{SelRuleId}'\n| take 1\n| extend Gz = tostring(column_ifexists('SettingsGz', ''))\n| extend S = iff(isempty(Gz), pack_array(bag_pack('k', 'Hinweis', 'v', 'Keine Einstellungen in der Watchlist - Export-Skript neu ausfuehren und Watchlist aktualisieren')), parse_json(gzip_decompress_from_base64_string(Gz)))\n| mv-expand S\n| project Einstellung = tostring(S.k), Wert = tostring(S.v)",
+              "size": 0,
+              "title": "Einstellungen: {SelRegel}  (Zelle markieren und kopieren; „→“ = Vorschlag für die Analytics Rule)",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "{Workspace}"
+              ],
+              "visualization": "table",
+              "gridSettings": {
+                "rowLimit": 100,
+                "formatters": [
+                  {
+                    "columnMatch": "Einstellung",
+                    "formatter": 1,
+                    "formatOptions": {
+                      "customColumnWidthSetting": "28ch"
+                    }
+                  },
+                  {
+                    "columnMatch": "Wert",
+                    "formatter": 1,
+                    "formatOptions": {
+                      "customColumnWidthSetting": "120ch"
+                    }
+                  }
+                ]
+              }
             }
           },
           {
@@ -319,7 +384,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Parallelbetrieb prüfen\nAlert-Zahlen im gewählten Zeitraum: Custom Detection (`AlertInfo`) gegen Analytics Rule (`SecurityAlert`). Größere Abweichungen vor dem Abschalten der Custom Detection klären. Analytics Rules mit dynamischem Alert-Titel werden hier nicht zugeordnet."
+        "json": "## Parallelbetrieb prüfen\nAlert-Zahlen im gewählten Zeitraum: Custom Detection (`AlertInfo`) gegen Analytics Rule (`SecurityAlert`). Größere Abweichungen vor dem Abschalten der Custom Detection klären. Zuordnung über Regelname bzw. Alert-Titel; dynamische Titel ({{Spalte}}) werden nicht zugeordnet."
       },
       "name": "txt-parallel"
     },
@@ -327,7 +392,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nlet CDAlerts = union isfuzzy=true\n        (datatable(Title:string, AlertId:string, DetectionSource:string)[]),\n        (AlertInfo | project Title, AlertId, DetectionSource)\n    | where DetectionSource =~ 'Custom detection'\n    | summarize CDAlerts = dcount(AlertId) by AKey = tolower(trim(@\"\\s+\", Title));\nlet ARAlerts = SecurityAlert\n    | where ProductName == 'Azure Sentinel'\n    | summarize ARAlerts = dcount(SystemAlertId) by Key = tolower(trim(@\"\\s+\", AlertName));\nCD\n| extend AKey = tolower(trim(@\"\\s+\", iff(isnotempty(AlertTitle), AlertTitle, Regel)))\n| join kind=leftouter CDAlerts on AKey\n| join kind=leftouter ARAlerts on Key\n| extend CDAlerts = coalesce(CDAlerts, 0), ARAlerts = coalesce(ARAlerts, 0)\n| extend Differenz = ARAlerts - CDAlerts\n| where Status == 'Parallelbetrieb' or CDAlerts > 0 or ARAlerts > 0\n| project Status, Regel, CDAlerts, ARAlerts, Differenz\n| order by abs(Differenz) desc",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet AROff = datatable(ARName:string)[{ARDisabled}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARInaktiv = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | join kind=leftouter AROff on Key\n    | extend ARVorhanden = coalesce(ARExists, false), ARAktiv = coalesce(ARExists, false) and not(coalesce(ARInaktiv, false))\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(ARAktiv), 'AR inaktiv',\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nlet CDAlerts = union isfuzzy=true\n        (datatable(Title:string, AlertId:string, DetectionSource:string)[]),\n        (AlertInfo | project Title, AlertId, DetectionSource)\n    | where DetectionSource =~ 'Custom detection'\n    | summarize CDAlerts = dcount(AlertId) by AKey = tolower(trim(@\"\\s+\", Title));\nlet ARAlerts = SecurityAlert\n    | where ProductName == 'Azure Sentinel'\n    | summarize ARAlerts = dcount(SystemAlertId) by Key = tolower(trim(@\"\\s+\", AlertName));\nCD\n| extend AKey = tolower(trim(@\"\\s+\", iff(isnotempty(AlertTitle), AlertTitle, Regel)))\n| join kind=leftouter CDAlerts on AKey\n| join kind=leftouter ARAlerts on Key\n| join kind=leftouter (ARAlerts | project AKey = Key, ARAlertsTitel = ARAlerts) on AKey\n| extend CDAlerts = coalesce(CDAlerts, 0), ARAlerts = coalesce(ARAlerts, 0) + iff(AKey != Key, coalesce(ARAlertsTitel, 0), 0)\n| extend Differenz = ARAlerts - CDAlerts\n| where Status == 'Parallelbetrieb' or CDAlerts > 0 or ARAlerts > 0\n| project Status, Regel, CDAlerts, ARAlerts, Differenz\n| order by abs(Differenz) desc",
         "size": 0,
         "title": "Alerts: Custom Detection vs. Analytics Rule",
         "queryType": 0,
@@ -361,6 +426,12 @@
                     "operator": "==",
                     "thresholdValue": "Offen",
                     "representation": "pending",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "AR inaktiv",
+                    "representation": "disabled",
                     "text": "{0}{1}"
                   },
                   {
