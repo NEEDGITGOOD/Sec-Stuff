@@ -1,0 +1,427 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# Migration: Custom Detections → Analytics Rules\n\nAbgleich der Defender-Custom-Detections (Watchlist `{Watchlist}`, Export per Skript) mit den Analytics Rules des Workspaces (live per ARM). Zuordnung über den Regelnamen, ohne Groß-/Kleinschreibung; abweichende Namen über die Spalte `AnalyticsRuleName` in der Watchlist.\n\n| Status | Bedeutung |\n|---|---|\n| **Offen** | Keine Analytics Rule mit passendem Namen |\n| **Parallelbetrieb** | Analytics Rule existiert, Custom Detection noch aktiv → Alerts vergleichen, dann Custom Detection deaktivieren |\n| **Abgeschlossen** | Analytics Rule existiert, Custom Detection deaktiviert |\n| *eigener Wert* | Aus Spalte `ManualStatus` (z. B. „Nicht migrieren“) – überschreibt die Automatik |"
+      },
+      "name": "intro"
+    },
+    {
+      "type": 9,
+      "name": "parameters",
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "parameters": [
+          {
+            "id": "6653cce6-7a76-41f0-b8a3-c226d1e7afde",
+            "version": "KqlParameterItem/1.0",
+            "name": "Workspace",
+            "label": "Sentinel-Workspace",
+            "type": 5,
+            "isRequired": true,
+            "query": "resources\r\n| where type =~ 'microsoft.operationalinsights/workspaces'\r\n| project id",
+            "crossComponentResources": [
+              "value::all"
+            ],
+            "typeSettings": {
+              "resourceTypeFilter": {
+                "microsoft.operationalinsights/workspaces": true
+              },
+              "additionalResourceOptions": [
+                "value::1"
+              ],
+              "showDefault": false
+            },
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources",
+            "defaultValue": "value::1"
+          },
+          {
+            "id": "dcd0fc9d-9190-429c-b653-9f09946a96bc",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Zeitraum (Alerts)",
+            "type": 4,
+            "isRequired": true,
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 1209600000
+                },
+                {
+                  "durationMs": 2592000000
+                }
+              ],
+              "allowCustom": true
+            },
+            "value": {
+              "durationMs": 1209600000
+            }
+          },
+          {
+            "id": "b60f45a4-642d-45c3-ae54-9b6519dc5f24",
+            "version": "KqlParameterItem/1.0",
+            "name": "Watchlist",
+            "label": "Watchlist-Alias",
+            "type": 1,
+            "isRequired": true,
+            "value": "CustomDetectionRules"
+          },
+          {
+            "id": "6bcbd8c9-a048-4ac6-a41d-c14ad8bca71b",
+            "version": "KqlParameterItem/1.0",
+            "name": "ARRules",
+            "label": "Analytics Rules (live)",
+            "type": 2,
+            "multiSelect": true,
+            "quote": "\"",
+            "delimiter": ",",
+            "query": "{\"version\": \"ARMEndpoint/1.0\", \"data\": null, \"headers\": [], \"method\": \"GET\", \"path\": \"{Workspace}/providers/Microsoft.SecurityInsights/alertRules\", \"urlParams\": [{\"key\": \"api-version\", \"value\": \"2024-09-01\"}], \"batchDisabled\": false, \"transformers\": [{\"type\": \"jsonpath\", \"settings\": {\"tablePath\": \"$.value\", \"columns\": [{\"path\": \"$.properties.displayName\", \"columnid\": \"value\"}]}}]}",
+            "queryType": 12,
+            "isHiddenWhenLocked": true,
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "defaultValue": "value::all"
+          }
+        ]
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Anzahl = count() by Status\n| union (CD | summarize Anzahl = count() | extend Status = 'Gesamt')\n| extend Sort = case(Status == 'Gesamt', 0, Status == 'Offen', 1, Status == 'Parallelbetrieb', 2, Status == 'Abgeschlossen', 3, 4)\n| order by Sort asc\n| project Status, Anzahl",
+        "size": 0,
+        "title": "Überblick",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Status",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Anzahl",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 17,
+              "options": {
+                "style": "decimal",
+                "maximumFractionDigits": 0
+              }
+            }
+          },
+          "showBorder": true
+        }
+      },
+      "name": "tiles"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| summarize Gesamt = count(), Erledigt = countif(Status == 'Abgeschlossen'), Parallel = countif(Status == 'Parallelbetrieb'), Stand = max(todatetime(column_ifexists('LastUpdatedTimeUTC', '')))\n| project Fortschritt = strcat(round(100.0 * Erledigt / Gesamt, 0), ' % abgeschlossen'),\n          InArbeit = strcat(round(100.0 * Parallel / Gesamt, 0), ' % im Parallelbetrieb'),\n          WatchlistStand = Stand",
+        "size": 0,
+        "title": "Fortschritt und Datenstand",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table"
+      },
+      "name": "progress"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nCD\n| project Status, Regel, ZielRegel, CDAktiv, ARVorhanden, Severity, Intervall, Tabellen, Aktionen, LetzterLauf, Notiz, RuleId\n| extend Sort = case(Status == 'Offen', 1, Status == 'Parallelbetrieb', 2, Status == 'Abgeschlossen', 4, 3)\n| order by Sort asc, Regel asc\n| project-away Sort",
+        "size": 0,
+        "title": "Status je Custom Detection (Zeile anklicken = Query anzeigen)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "exportMultipleValues": false,
+        "exportedParameters": [
+          {
+            "fieldName": "RuleId",
+            "parameterName": "SelRuleId",
+            "parameterType": 1
+          },
+          {
+            "fieldName": "Regel",
+            "parameterName": "SelRegel",
+            "parameterType": 1
+          },
+          {
+            "fieldName": "ZielRegel",
+            "parameterName": "SelARName",
+            "parameterType": 1
+          }
+        ],
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Status",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Abgeschlossen",
+                    "representation": "success",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Parallelbetrieb",
+                    "representation": "warning",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Offen",
+                    "representation": "pending",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "unknown",
+                    "text": "{0}{1}"
+                  }
+                ]
+              }
+            }
+          ],
+          "filter": true,
+          "rowLimit": 1000,
+          "labelSettings": [
+            {
+              "columnId": "ZielRegel",
+              "label": "Analytics Rule (Soll)"
+            },
+            {
+              "columnId": "CDAktiv",
+              "label": "CD aktiv"
+            },
+            {
+              "columnId": "ARVorhanden",
+              "label": "AR vorhanden"
+            },
+            {
+              "columnId": "LetzterLauf",
+              "label": "Letzter CD-Lauf"
+            },
+            {
+              "columnId": "Aktionen",
+              "label": "Response Actions"
+            }
+          ]
+        }
+      },
+      "name": "statusgrid"
+    },
+    {
+      "type": 12,
+      "name": "detail",
+      "conditionalVisibility": {
+        "parameterName": "SelRuleId",
+        "comparison": "isNotEqualTo"
+      },
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+          {
+            "type": 9,
+            "name": "detailparams",
+            "content": {
+              "version": "KqlParameterItem/1.0",
+              "style": "pills",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "{Workspace}"
+              ],
+              "parameters": [
+                {
+                  "id": "7665d8ea-856b-447b-a881-0329be25ad54",
+                  "version": "KqlParameterItem/1.0",
+                  "name": "CDQuery",
+                  "type": 1,
+                  "query": "_GetWatchlist('{Watchlist}')\n| where tostring(column_ifexists('RuleId', '')) == '{SelRuleId}'\n| extend Gz = tostring(column_ifexists('QueryGz', ''))\n| project Q = iff(isempty(Gz), '// Keine Query in der Watchlist - Export-Skript neu ausfuehren und Watchlist aktualisieren', gzip_decompress_from_base64_string(Gz))\n| take 1",
+                  "isHiddenWhenLocked": true,
+                  "crossComponentResources": [
+                    "{Workspace}"
+                  ],
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces"
+                },
+                {
+                  "id": "d832c52b-a3ef-48d1-93dc-ece741ebc8a1",
+                  "version": "KqlParameterItem/1.0",
+                  "name": "ARQuery",
+                  "type": 1,
+                  "query": "{\"version\": \"ARMEndpoint/1.0\", \"data\": null, \"headers\": [], \"method\": \"GET\", \"path\": \"{Workspace}/providers/Microsoft.SecurityInsights/alertRules\", \"urlParams\": [{\"key\": \"api-version\", \"value\": \"2024-09-01\"}], \"batchDisabled\": false, \"transformers\": [{\"type\": \"jsonpath\", \"settings\": {\"tablePath\": \"$.value[?(@.properties.displayName=='{SelARName}')]\", \"columns\": [{\"path\": \"$.properties.query\", \"columnid\": \"Query\"}]}}]}",
+                  "isHiddenWhenLocked": true,
+                  "queryType": 12
+                }
+              ]
+            }
+          },
+          {
+            "type": 1,
+            "name": "cdquery",
+            "customWidth": "50",
+            "content": {
+              "json": "### Custom Detection: {SelRegel}\n```kusto\n{CDQuery}\n```"
+            }
+          },
+          {
+            "type": 1,
+            "name": "arquery",
+            "customWidth": "50",
+            "content": {
+              "json": "### Analytics Rule: {SelARName}\n```kusto\n{ARQuery}\n```\n*Leer = keine Analytics Rule mit exakt diesem Namen gefunden.*"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Parallelbetrieb prüfen\nAlert-Zahlen im gewählten Zeitraum: Custom Detection (`AlertInfo`) gegen Analytics Rule (`SecurityAlert`). Größere Abweichungen vor dem Abschalten der Custom Detection klären. Analytics Rules mit dynamischem Alert-Titel werden hier nicht zugeordnet."
+      },
+      "name": "txt-parallel"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let AR = datatable(ARName:string)[{ARRules}]\n    | extend Key = tolower(trim(@\"\\s+\", ARName))\n    | summarize by Key\n    | extend ARExists = true;\nlet CD = _GetWatchlist('{Watchlist}')\n    | extend RuleId = tostring(column_ifexists('RuleId', '')),\n             Regel = tostring(column_ifexists('DisplayName', '')),\n             AlertTitle = tostring(column_ifexists('AlertTitle', '')),\n             CDAktiv = tolower(tostring(column_ifexists('IsEnabled', ''))) == 'true',\n             Intervall = tostring(column_ifexists('Period', '')),\n             Severity = tostring(column_ifexists('Severity', '')),\n             Tabellen = tostring(column_ifexists('Tables', '')),\n             Aktionen = tostring(column_ifexists('ResponseActions', '')),\n             LetzterLauf = tostring(column_ifexists('LastRunStatus', '')),\n             ARNameOverride = tostring(column_ifexists('AnalyticsRuleName', '')),\n             ManuellerStatus = tostring(column_ifexists('ManualStatus', '')),\n             Notiz = tostring(column_ifexists('Notes', ''))\n    | extend ZielRegel = iff(isnotempty(ARNameOverride), ARNameOverride, Regel)\n    | extend Key = tolower(trim(@\"\\s+\", ZielRegel))\n    | join kind=leftouter AR on Key\n    | extend ARVorhanden = coalesce(ARExists, false)\n    | extend Status = case(\n        isnotempty(ManuellerStatus), ManuellerStatus,\n        ARVorhanden and not(CDAktiv), 'Abgeschlossen',\n        ARVorhanden and CDAktiv, 'Parallelbetrieb',\n        'Offen');\nlet CDAlerts = union isfuzzy=true\n        (datatable(Title:string, AlertId:string, DetectionSource:string)[]),\n        (AlertInfo | project Title, AlertId, DetectionSource)\n    | where DetectionSource =~ 'Custom detection'\n    | summarize CDAlerts = dcount(AlertId) by AKey = tolower(trim(@\"\\s+\", Title));\nlet ARAlerts = SecurityAlert\n    | where ProductName == 'Azure Sentinel'\n    | summarize ARAlerts = dcount(SystemAlertId) by Key = tolower(trim(@\"\\s+\", AlertName));\nCD\n| extend AKey = tolower(trim(@\"\\s+\", iff(isnotempty(AlertTitle), AlertTitle, Regel)))\n| join kind=leftouter CDAlerts on AKey\n| join kind=leftouter ARAlerts on Key\n| extend CDAlerts = coalesce(CDAlerts, 0), ARAlerts = coalesce(ARAlerts, 0)\n| extend Differenz = ARAlerts - CDAlerts\n| where Status == 'Parallelbetrieb' or CDAlerts > 0 or ARAlerts > 0\n| project Status, Regel, CDAlerts, ARAlerts, Differenz\n| order by abs(Differenz) desc",
+        "size": 0,
+        "title": "Alerts: Custom Detection vs. Analytics Rule",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Status",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Abgeschlossen",
+                    "representation": "success",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Parallelbetrieb",
+                    "representation": "warning",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "Offen",
+                    "representation": "pending",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "unknown",
+                    "text": "{0}{1}"
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "CDAlerts",
+              "formatter": 4,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            },
+            {
+              "columnMatch": "ARAlerts",
+              "formatter": 4,
+              "formatOptions": {
+                "palette": "blue"
+              }
+            }
+          ],
+          "filter": true,
+          "rowLimit": 1000
+        }
+      },
+      "name": "alertcompare"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"version\": \"ARMEndpoint/1.0\", \"data\": null, \"headers\": [], \"method\": \"GET\", \"path\": \"{Workspace}/providers/Microsoft.SecurityInsights/alertRules\", \"urlParams\": [{\"key\": \"api-version\", \"value\": \"2024-09-01\"}], \"batchDisabled\": false, \"transformers\": [{\"type\": \"jsonpath\", \"settings\": {\"tablePath\": \"$.value\", \"columns\": [{\"path\": \"$.properties.displayName\", \"columnid\": \"Regel\"}, {\"path\": \"$.kind\", \"columnid\": \"Typ\"}, {\"path\": \"$.properties.enabled\", \"columnid\": \"Aktiv\"}, {\"path\": \"$.properties.severity\", \"columnid\": \"Severity\"}, {\"path\": \"$.properties.queryFrequency\", \"columnid\": \"Intervall\"}, {\"path\": \"$.properties.lastModifiedUtc\", \"columnid\": \"Geaendert\"}]}}]}",
+        "size": 0,
+        "title": "Analytics Rules im Workspace (live)",
+        "queryType": 12,
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 1000,
+          "sortBy": [
+            {
+              "itemKey": "Regel",
+              "sortOrder": 1
+            }
+          ],
+          "labelSettings": [
+            {
+              "columnId": "Geaendert",
+              "label": "Zuletzt geändert"
+            }
+          ]
+        }
+      },
+      "name": "argrid"
+    }
+  ],
+  "fallbackResourceIds": [],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}
